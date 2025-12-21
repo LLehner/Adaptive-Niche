@@ -68,16 +68,20 @@ def get_neighs_by_radius(adata, radii):
     min_cells = cells_in_radius_df.to_numpy().min(axis=0).round().astype(int)
     first_min_idx =np.argmax(min_cells>=20)
     max_cells = cells_in_radius_df.to_numpy().max(axis=0).round().astype(int)
-    #first_max_idx = np.argmax(max_cells>=50)
+    first_max_idx = np.argmax(max_cells>=50)
 
     # cells within radius with radius such that min cells >=20
-    adata.obs["cells_in_radius"] = cells_in_radius_df[radii[first_min_idx]]
+    adata.obs["min_cells_in_radius"] = cells_in_radius_df[radii[first_min_idx]]
+    # cells within radius with radius such that max cells <=20
+    adata.obs["max_cells_in_radius"] = cells_in_radius_df[radii[first_max_idx]]
+
     adata.uns["radius_stats"] = {
         "radii": radii,
         "mean_cells": mean,
         "min_cells": min_cells,
         "max_cells": max_cells,
-        "first_min_idx": first_min_idx}
+        "first_min_idx": first_min_idx,
+        "first_max_idx": first_max_idx}
     
 
 def plot_neighs_by_radius(adata):
@@ -87,12 +91,13 @@ def plot_neighs_by_radius(adata):
     min_cells = adata.uns["radius_stats"]["min_cells"]
     max_cells = adata.uns["radius_stats"]["max_cells"]
     first_min_idx = adata.uns["radius_stats"]["first_min_idx"]
+    first_max_idx = adata.uns["radius_stats"]["first_max_idx"]
     
     plt.plot(radii, mean, color='black', marker='o', markersize=6, label="mean n_neighbors within radius")
     plt.plot(radii, max_cells, color='red', marker='o', markersize=6, label="min n_neighbors within radius")
     plt.plot(radii, min_cells, color='blue', marker='o', markersize=6, label="max n_neighbors within radius")
-    plt.axvline(x=radii[first_min_idx], color='orange', label='first radius with min 20 neighbors')
-    #plt.axvline(x=radii[first_max_idx], color='orange', label='first radius with max 50 neighbors')
+    #plt.axvline(x=radii[first_min_idx], color='orange', label='first radius with min 20 neighbors')
+    plt.axvline(x=radii[first_max_idx], color='orange', label='first radius with max 50 neighbors')
     plt.xlabel("radius")
     plt.ylabel("n_neighbors")
     plt.legend()
