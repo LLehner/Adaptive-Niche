@@ -5,7 +5,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import gstools as gs
 
-def plot_dist_histogram(adata, n_neighs_range, bins, save=False):
+def plot_dist_histogram(adata, n_neighs_range, bins, save=False, id=""):
     """Plots histogram of distance distributions for each spatial neighbor graph."""
     
     fig, axes = plt.subplots(1, len(n_neighs_range), figsize=(5*len(n_neighs_range), 5))
@@ -16,12 +16,13 @@ def plot_dist_histogram(adata, n_neighs_range, bins, save=False):
         histogram.set_xlabel("Distance")
         fig = histogram.get_figure()
         
-        if save:
-            fig.savefig(f"{n_neighs}_neighbors_dist_histogram.png")
-        #else:
-            #fig.show()
+    if save:
+        fig.savefig(f"{id}_{n_neighs}_neighbors_dist_histogram.png", dpi=300)
+        fig.clear()
+    else:
+        fig.show()
         
-def plot_dist_by_neigh(adata, distances_key):
+def plot_dist_by_neigh(adata, distances_key, save=False, id=""):
     """Plots spatial distances by nth neighbor."""
     
     csr = adata.obsp[distances_key]
@@ -42,6 +43,8 @@ def plot_dist_by_neigh(adata, distances_key):
     x = np.tile(np.arange(max_len), len(arrays))
     y = data.flatten()
     mask = ~np.isnan(y)
+    
+    plt.figure(figsize=(6, 4))
     plt.scatter(x[mask], y[mask], color='grey', alpha=0.3, s=10, label='raw distances')
 
     means = np.nanmean(data, axis=0)
@@ -50,7 +53,12 @@ def plot_dist_by_neigh(adata, distances_key):
     plt.xlabel("nth neighbor")
     plt.ylabel("spatial distance")
     plt.legend()
-    plt.show()
+    
+    if save:
+        plt.savefig(f"{id}_dist_by_neigh.png", dpi=300)
+        plt.close()
+    else:
+        plt.show()
     
 def get_neighs_by_radius(adata, radii):
     """Calculate summary statistics of neighbors within radius across range of radii."""
@@ -84,7 +92,7 @@ def get_neighs_by_radius(adata, radii):
         "first_max_idx": first_max_idx}
     
 
-def plot_neighs_by_radius(adata):
+def plot_neighs_by_radius(adata, save=False, id=""):
     """Plots number of neighbors within radius across range of radii."""
     radii = adata.uns["radius_stats"]["radii"]
     mean = adata.uns["radius_stats"]["mean_cells"]
@@ -93,12 +101,17 @@ def plot_neighs_by_radius(adata):
     first_min_idx = adata.uns["radius_stats"]["first_min_idx"]
     first_max_idx = adata.uns["radius_stats"]["first_max_idx"]
     
+    plt.figure(figsize=(6,4))
     plt.plot(radii, mean, color='black', marker='o', markersize=6, label="mean n_neighbors within radius")
-    plt.plot(radii, max_cells, color='red', marker='o', markersize=6, label="min n_neighbors within radius")
-    plt.plot(radii, min_cells, color='blue', marker='o', markersize=6, label="max n_neighbors within radius")
+    plt.plot(radii, max_cells, color='red', marker='o', markersize=6, label="max n_neighbors within radius")
+    plt.plot(radii, min_cells, color='blue', marker='o', markersize=6, label="min n_neighbors within radius")
     #plt.axvline(x=radii[first_min_idx], color='orange', label='first radius with min 20 neighbors')
     plt.axvline(x=radii[first_max_idx], color='orange', label='first radius with max 50 neighbors')
     plt.xlabel("radius")
     plt.ylabel("n_neighbors")
     plt.legend()
-    plt.show()
+    if save:
+        plt.savefig(f"{id}_neighs_by_radius.png", dpi=300)
+        plt.close()
+    else:
+        plt.show()
