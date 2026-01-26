@@ -4,9 +4,9 @@ import numpy as np
 #TODO simplify with squidpy
 #TODO add graph pruning and node-merging option
 
-def _get_distances(adata, k):
+def _get_distances(adata, k=1):
     coords = adata.obsm["spatial"]
-    k_density = 1
+    k_density = k
 
     tree = cKDTree(coords)
     dists, _ = tree.query(coords, k=k_density + 1)
@@ -14,7 +14,7 @@ def _get_distances(adata, k):
     n = len(h)
     return h,n,tree
 
-def _get_neighbors(coords, tree, type):
+def _get_neighbors(coords, tree, type, n):
 
     if type == "delaunay":
         tri = Delaunay(coords)
@@ -27,7 +27,7 @@ def _get_neighbors(coords, tree, type):
                     neighbors[a].add(b)
                     neighbors[b].add(a)
     else:
-        k_adj = 100  # typical planar degree
+        k_adj = 5  # typical planar degree
 
         _, idx = tree.query(coords, k=k_adj + 1)
 
@@ -36,7 +36,13 @@ def _get_neighbors(coords, tree, type):
             for j in idx[i, 1:]:
                 neighbors[i].add(j)
                 neighbors[j].add(i)
-    return neighbors
+    Adj = np.zeros((n, n), dtype=int)
+
+    for i, nbrs in neighbors.items():
+        for j in nbrs:
+            Adj[i, j] = 1
+            Adj[j, i] = 1  # redundant if neighbors is symmetric, but safe
+    return neighbors, Adj
 
 def _set_seeds(h, neighbors, n):
     labels = np.zeros(n, dtype=int)
