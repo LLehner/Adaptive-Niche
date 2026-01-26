@@ -1,55 +1,92 @@
 from scipy.spatial import Delaunay, cKDTree
 import numpy as np
+from spatialdata import SpatialData
+from anndata import AnnData
+import squidpy as sq
+import scipy.sparse as sp
 
 #TODO simplify with squidpy
 #TODO add graph pruning and node-merging option
 
-def _get_distances(adata, k=1):
-    coords = adata.obsm["spatial"]
-    k_density = k
+def get_distances(adata: AnnData | SpatialData, k=1, log=True):
+    """For each cell get the distance to its k-th nearest neighbor.
+    
+    Returns
+    -------
+    distances : array-like
+        Array of distances to k-th nearest neighbor for each cell.
+    """
+    adata = adata.tables["table"] if isinstance(adata, SpatialData) else adata
+    sq.gr.spatial_neighbors(adata, coord_type="generic", n_neighs=k)
+    distances = adata.obsp["spatial_distances"].data
+    if log:
+        distances = np.log(distances)
+    adata.obs[f"{k}_nn_distance"] = distances
 
-    tree = cKDTree(coords)
-    dists, _ = tree.query(coords, k=k_density + 1)
-    h = np.log(dists[:, k_density])  # scalar field
-    n = len(h)
-    return h,n,tree
-
-def _get_neighbors(coords, tree, type, n):
-
+def get_neighbors(adata, type, gmm_labels, n=10):
     if type == "delaunay":
-        tri = Delaunay(coords)
+        sq.gr.spatial_neighbors(adata, library_key=gmm_labels, coord_type="generic", delaunay=True)
+    elif type =="knn":
+        sq.gr.spatial_neighbors(adata, library_key=gmm_labels,coord_type="generic", n_neighs=n)
 
-        neighbors = {i: set() for i in range(n)}
-        for simplex in tri.simplices:
-            for i in range(3):
-                for j in range(i + 1, 3):
-                    a, b = simplex[i], simplex[j]
-                    neighbors[a].add(b)
-                    neighbors[b].add(a)
+# not yet tested!
+def prune_graph(adata, distance_key, type):
+    A = adata.obsp["spatial_connectivities"].tocsr()
+    D = adata.obsp["spatial_distances"].tocsr()
+
+    # Convert to COO for masking
+    A_coo = A.tocoo()
+    D_coo = D.tocoo()
+
+    if type == "threshold":
+        mean_dist = adata.obs[distance_key].values.mean()
+        mask = D_coo.data <= mean_dist
+
+    elif type == "percentile":
+        p = 90  # remove top 10% distances
+        cutoff = np.percentile(D_coo.data, p)
+        mask = D_coo.data <= cutoff
+
     else:
-        k_adj = 5  # typical planar degree
+        raise ValueError("type must be 'threshold' or 'percentile'")
 
-        _, idx = tree.query(coords, k=k_adj + 1)
+    # Prune adjacency
+    A_pruned = sp.coo_matrix(
+        (A_coo.data[mask], (A_coo.row[mask], A_coo.col[mask])),
+        shape=A.shape
+    ).tocsr()
 
-        neighbors = {i: set() for i in range(n)}
-        for i in range(n):
-            for j in idx[i, 1:]:
-                neighbors[i].add(j)
-                neighbors[j].add(i)
-    Adj = np.zeros((n, n), dtype=int)
+    # Prune distances (same mask)
+    D_pruned = sp.coo_matrix(
+        (D_coo.data[mask], (D_coo.row[mask], D_coo.col[mask])),
+        shape=D.shape
+    ).tocsr()
 
-    for i, nbrs in neighbors.items():
-        for j in nbrs:
-            Adj[i, j] = 1
-            Adj[j, i] = 1  # redundant if neighbors is symmetric, but safe
-    return neighbors, Adj
+    adata.obsp["spatial_connectivities_pruned"] = A_pruned
+    adata.obsp["spatial_distances_pruned"] = D_pruned
 
-def _set_seeds(h, neighbors, n):
+
+def set_seeds(adata, distances_key, gmm_key, spatial_connectivity_key="spatial_connectivities"):
+    
+    graph = adata.obsp[spatial_connectivity_key].tocsr()
+    n = graph.shape[0]
+    distances = adata.obs[distances_key].values
+
     labels = np.zeros(n, dtype=int)
     current_label = 1
 
     for i in range(n):
-        if all(h[i] <= h[j] for j in neighbors[i]):
+        # indices of neighbors of i (excluding self if present)
+        neighbors = graph.indices[graph.indptr[i]:graph.indptr[i+1]]
+        neighbors = neighbors[neighbors != i]
+
+        if neighbors.size == 0:
+            continue
+
+        # local minimum condition
+        if np.all(distances[i] < distances[neighbors]):
             labels[i] = current_label
             current_label += 1
+
     return labels
+
