@@ -2,16 +2,12 @@ import numpy as np
 import pandas as pd
 from sklearn.mixture import GaussianMixture
 from sklearn.metrics import adjusted_rand_score
-from sklearn.utils import resample
-import squidpy as sq
-from spatialdata import SpatialData
 import heapq
 import numpy as np
 from sklearn.mixture import GaussianMixture
-from anndata import AnnData
-
-#TODO adapt to both adata/sdata usage
-#TODO add other clustering methods (DBSCAN, kmeans. leiden) for comparison
+from sklearn.cluster import KMeans,DBSCAN
+import igraph as ig
+import leidenalg as la
 
 def fit_gmm(adata, distance_key, k_range, random_state=0, covariance_type="full", reg_covar=1e-6):
     """
@@ -38,14 +34,16 @@ def fit_gmm(adata, distance_key, k_range, random_state=0, covariance_type="full"
 
         labels = gmm.predict(distances)
         resp = gmm.predict_proba(distances)
-
+        bic = gmm.bic(distances)
+        aic = gmm.aic(distances)
         results[k] = {
             "model": gmm,
             "labels": labels,
             "responsibilities": resp,
             "log_likelihood": gmm.score(distances) * n,
-            "bic": gmm.bic(distances),
-            "aic": gmm.aic(distances),
+            "bic": bic,
+            "aic": aic,
+            "icl": bic - 2.0 * (-np.sum(resp * np.log(resp + 1e-12))),
             "n_params": gmm._n_parameters(),
         }
         print(f"Fitted GMM with k={k}")
@@ -68,11 +66,9 @@ def choose_component(results, delta_bic_threshold=10.0):
     icl = {}
 
     for k in ks:
-        r = results[k]["responsibilities"]
-        entropy = -np.sum(r * np.log(r + 1e-12))
         bic[k] = results[k]["bic"]
         aic[k] = results[k]["aic"]
-        icl[k] = bic[k] - 2.0 * entropy
+        icl[k] = results[k]["icl"]
 
     # ICL-optimal K
     k_icl = min(icl, key=icl.get)
@@ -146,7 +142,7 @@ def cluster_stability(adata, distance_key, k, n_repeats=50, subsample_fraction=0
         "ari_scores": ari_scores,
     }
 
-def watershed(adata, distances_key, spatial_connectivity_key, labels_key):
+def _watershed(adata, distances_key, spatial_connectivity_key, labels_key):
     """performs watershed-like 'segmentation' on graph based on scalar distance values using priority queue."""
     # Get scalar values
     h = adata.obs[distances_key].values
@@ -174,5 +170,103 @@ def watershed(adata, distances_key, spatial_connectivity_key, labels_key):
                 labels[j] = labels[i]     # propagate basin label
                 visited[j] = True
                 heapq.heappush(pq, (h[j], j))
+
+    return labels
+
+def cluster_domains(
+    adata,
+    spatial_connectivity_key="spatial_connectivities",
+    flavor="leiden",
+    distances_key="distances",
+    seeds_key="watershed_seeds",
+    n_clusters=100,
+    resolution=1.0,
+    eps=10,
+    min_samples=5,
+    random_state=0
+):
+    """
+    Cluster a sparse adjacency matrix using either Leiden (graph-based)
+    or KMeans (row-wise embedding of adjacency).
+
+    Parameters
+    ----------
+    adata : AnnData
+        Annotated data matrix
+    spatial_connectivity_key : str
+        Key in adata.obsp for adjacency matrix
+    flavor : {"watershed", "leiden", "kmeans", "dbscan"}
+        Clustering method
+    distances_key : str
+        Key in adata.obs for distances (used only for watershed)
+    n_clusters : int
+        Number of clusters (used only for kmeans)
+    resolution : float
+        Leiden resolution parameter
+    random_state : int
+        Random seed
+
+    Returns
+    -------
+    labels : np.ndarray (shape: N)
+        Updates adata.obs with cluster labels under keys.
+    """
+    
+    if flavor == "watershed":
+        labels = _watershed(
+            adata,
+            distances_key=distances_key,
+            spatial_connectivity_key=spatial_connectivity_key,
+            labels_key=seeds_key
+        )
+        adata.obs["watershed_niches"] = pd.Categorical(labels)
+
+    elif flavor == "leiden":
+        sources, targets = adata.obsp[spatial_connectivity_key].nonzero()
+
+        g = ig.Graph(
+            n=adata.n_obs,
+            edges=list(zip(sources, targets)),
+            edge_attrs={"weight": None},
+            directed=False
+        )
+
+        partition = la.find_partition(
+            g,
+            la.RBConfigurationVertexPartition,
+            weights=None,
+            resolution_parameter=resolution,
+            seed=random_state
+        )
+
+        labels = np.array(partition.membership)
+        adata.obs["leiden_niches"] = pd.Categorical(labels)
+
+    elif flavor == "kmeans":
+        X = adata.obs[distances_key].values.reshape(-1, 1)
+
+        km = KMeans(
+            n_clusters=n_clusters,
+            random_state=random_state,
+            n_init="auto"
+        )
+
+        labels = km.fit_predict(X)
+        adata.obs["kmeans_niches"] = pd.Categorical(labels)
+    
+    elif flavor == "dbscan":
+        coords = adata.obsm["spatial"]
+
+        db = DBSCAN(
+            eps=eps,
+            min_samples=min_samples,
+            metric="euclidean",
+            n_jobs=-1
+        )
+
+        labels = db.fit_predict(coords)
+        adata.obs["dbscan_niches"] = pd.Categorical(labels)
+    else:
+        raise ValueError(f"Unknown flavor '{flavor}'")
 
     return labels

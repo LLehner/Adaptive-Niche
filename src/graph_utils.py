@@ -5,9 +5,6 @@ from anndata import AnnData
 import squidpy as sq
 import scipy.sparse as sp
 
-#TODO simplify with squidpy
-#TODO add graph pruning and node-merging option
-
 def get_distances(adata: AnnData | SpatialData, k=1, log=True):
     """For each cell get the distance to its k-th nearest neighbor.
     
@@ -30,7 +27,7 @@ def get_neighbors(adata, type, gmm_labels, n=10):
         sq.gr.spatial_neighbors(adata, library_key=gmm_labels,coord_type="generic", n_neighs=n)
 
 # not yet tested!
-def prune_graph(adata, distance_key, type):
+def prune_graph(adata, type, threshold=None, percentile=None):
     A = adata.obsp["spatial_connectivities"].tocsr()
     D = adata.obsp["spatial_distances"].tocsr()
 
@@ -39,12 +36,10 @@ def prune_graph(adata, distance_key, type):
     D_coo = D.tocoo()
 
     if type == "threshold":
-        mean_dist = adata.obs[distance_key].values.mean()
-        mask = D_coo.data <= mean_dist
+        mask = D_coo.data <= threshold
 
     elif type == "percentile":
-        p = 90  # remove top 10% distances
-        cutoff = np.percentile(D_coo.data, p)
+        cutoff = np.percentile(D_coo.data, percentile)
         mask = D_coo.data <= cutoff
 
     else:
@@ -66,7 +61,7 @@ def prune_graph(adata, distance_key, type):
     adata.obsp["spatial_distances_pruned"] = D_pruned
 
 
-def set_seeds(adata, distances_key, gmm_key, spatial_connectivity_key="spatial_connectivities"):
+def set_seeds(adata, distances_key, spatial_connectivity_key="spatial_connectivities"):
     
     graph = adata.obsp[spatial_connectivity_key].tocsr()
     n = graph.shape[0]
@@ -88,5 +83,5 @@ def set_seeds(adata, distances_key, gmm_key, spatial_connectivity_key="spatial_c
             labels[i] = current_label
             current_label += 1
 
-    return labels
+    adata.obs["watershed_seeds"] = labels
 
