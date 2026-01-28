@@ -27,23 +27,24 @@ def assign_colors(sdata, column_key, seed=42):
 
     sdata.tables["table"].uns[f"{column_key}_colors"] = colors
     
+import matplotlib.pyplot as plt
+
 def plot_scores(data):
     scores = ["bic", "aic", "icl"]
-    x = range(len(scores))
-
-    # Fixed, unique colors per score
+    
     score_colors = {
         "bic": "lightblue",
         "aic": "orange",
         "icl": "black",
     }
 
-    keys = list(data.keys())
+    keys = sorted(list(data.keys()))
 
     fig, ax = plt.subplots()
 
     for score in scores:
         y = [data[k][score] for k in keys]
+        
         ax.plot(
             keys,
             y,
@@ -52,7 +53,20 @@ def plot_scores(data):
             label=score,
         )
 
-    ax.set_xlabel("i")
+        min_score_val = min(y)              
+        min_index = y.index(min_score_val)  
+        best_k = keys[min_index]            
+        
+        # add vertical indicator of lowest
+        ax.axvline(
+            x=best_k, 
+            color=score_colors[score], 
+            linestyle=":", 
+            linewidth=1.5,
+            alpha=0.7 
+        )
+
+    ax.set_xlabel("Number of components")
     ax.set_ylabel("Score")
     ax.set_title("Scores by number of components")
     ax.legend()
