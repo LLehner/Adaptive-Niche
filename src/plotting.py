@@ -1,5 +1,6 @@
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+import seaborn as sns
 import numpy as np
 import squidpy as sq
 import math
@@ -195,8 +196,6 @@ def plot_knn_by_regime(adata, labels_key="gmm_labels", k=1, cmap="viridis", size
 
     plt.suptitle(f"Spatial Density Regimes ({labels_key})", fontsize=16)
 
-# Assuming assign_colors is defined in this same file (src/plotting.py)
-
 def plot_niches(data, niche_key="watershed_niches", size=3, dpi=300, output_path=None, title=None, ax=None):
     """
     Plots spatial niches using Squidpy with consistent coloring.
@@ -220,31 +219,22 @@ def plot_niches(data, niche_key="watershed_niches", size=3, dpi=300, output_path
         A specific axes to plot on. If None, creates a new figure.
     """
     
-    # 1. Handle Input Type (SpatialData vs AnnData)
     if isinstance(data, SpatialData):
         adata = data.tables["table"]
-        # Ensure colors are assigned using your custom logic
-        # We pass 'data' (sdata) because your assign_colors function expects it
         assign_colors(data, niche_key)
     else:
         adata = data
-        # Fallback: try to assign colors on adata if possible, or assume it's done
         try:
             assign_colors(adata, niche_key)
         except:
             pass 
 
-    # 2. Ensure Categorical (Required for discrete coloring in Squidpy)
     if niche_key in adata.obs:
         adata.obs[niche_key] = adata.obs[niche_key].astype("category")
 
-    # 3. Handle Title
     if title is None:
         title = f"Spatial Domains: {niche_key}"
 
-    # 4. Plotting
-    # Squidpy automatically looks for adata.uns[f'{niche_key}_colors']
-    # which was populated by assign_colors()
     sq.pl.spatial_scatter(
         adata,
         color=niche_key,
@@ -257,7 +247,6 @@ def plot_niches(data, niche_key="watershed_niches", size=3, dpi=300, output_path
         figsize=(10, 10) if ax is None else None
     )
 
-    # 5. Save if requested
     if output_path:
         plt.savefig(output_path, dpi=dpi, bbox_inches='tight')
         print(f"Saved plot to {output_path}")
@@ -345,3 +334,59 @@ def plot_niche_stats(
     plt.show()
 
 
+
+
+def plot_knn_histogram(adata, k=1, bins=50, title=None, ax=None, color='#4c72b0', kde=True, **kwargs):
+    """
+    Plots the distribution (histogram) of the k-th nearest neighbor distances.
+    
+    Parameters
+    ----------
+    adata : AnnData
+        Annotated data matrix.
+    k : int
+        The k-th neighbor index (looks for column '{k}_nn_distance').
+    bins : int
+        Number of histogram bins.
+    title : str, optional
+        Custom title.
+    ax : matplotlib.axes.Axes, optional
+        Existing axes to plot on.
+    color : str
+        Bar color.
+    kde : bool
+        Whether to plot the Kernel Density Estimate line.
+    **kwargs
+        Additional arguments passed to sns.histplot.
+    """
+    key = f"{k}_nn_distance"
+    
+    if key not in adata.obs:
+        raise ValueError(f"Key '{key}' not found in adata.obs. Run get_distances(adata, k={k}) first.")
+        
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6, 4))
+        
+    if title is None:
+        title = f"Distribution of Log Distances (k={k})"
+
+    sns.histplot(
+        data=adata.obs, 
+        x=key, 
+        bins=bins, 
+        kde=kde, 
+        color=color, 
+        edgecolor=None,
+        ax=ax,
+        **kwargs
+    )
+    
+    ax.set_title(title)
+    ax.set_xlabel("Log Distance")
+    ax.set_ylabel("Frequency")
+    
+    mean_val = adata.obs[key].mean()
+    ax.axvline(mean_val, color='k', linestyle='--', alpha=0.5, label=f'Mean: {mean_val:.2f}')
+    
+    if ax is None:
+        plt.show()
