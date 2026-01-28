@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import squidpy as sq
 import math
+from spatialdata import SpatialData
 
 def assign_colors(sdata, column_key, seed=42):
     """
@@ -77,7 +78,7 @@ def plot_scores(data):
     plt.show()
 
 
-def plot_knn_distance(adata, k=1, **kwargs):
+def plot_knn_distance(adata, distance_key, **kwargs):
     """
     Plots the spatial scatter colored by the k-th nearest neighbor distance.
     
@@ -85,19 +86,19 @@ def plot_knn_distance(adata, k=1, **kwargs):
     ----------
     adata : AnnData
         The annotated data matrix.
-    k : int
-        The k-th neighbor index used to generate the distance column (e.g., '1_nn_distance').
+    distance_key : str
+        The key in adata.obs used to color the plot (e.g., '1_nn_distance').
     **kwargs
         Additional arguments passed to sq.pl.spatial_scatter (e.g., size, cmap, shape).
     """
-    key = f"{k}_nn_distance"
+    key = distance_key
     
     # Safety check
     if key not in adata.obs:
-        raise ValueError(f"Key '{key}' not found in adata.obs. Please run get_distances(adata, k={k}) first.")
+        raise ValueError(f"Key '{key}' not found in adata.obs. Please run get_distances(adata, k={distance_key}) first.")
 
     # Set default title if not provided in kwargs
-    title = kwargs.pop("title", f"Log Distance to {k}-th NN")
+    title = kwargs.pop("title", f"Log Distance to {distance_key}-th NN")
     
     # Set default cmap if not provided
     if "cmap" not in kwargs:
@@ -194,10 +195,6 @@ def plot_knn_by_regime(adata, labels_key="gmm_labels", k=1, cmap="viridis", size
 
     plt.suptitle(f"Spatial Density Regimes ({labels_key})", fontsize=16)
 
-import squidpy as sq
-import matplotlib.pyplot as plt
-from spatialdata import SpatialData
-
 # Assuming assign_colors is defined in this same file (src/plotting.py)
 
 def plot_niches(data, niche_key="watershed_niches", size=3, dpi=300, output_path=None, title=None, ax=None):
@@ -267,3 +264,84 @@ def plot_niches(data, niche_key="watershed_niches", size=3, dpi=300, output_path
     
     if ax is None and not output_path:
         plt.show()
+        
+def plot_niche_stats(
+    adata,
+    col_keys,
+    sort_by,
+    category_key,
+    normalize=True,
+):
+    category_col = category_key
+
+    # --- split requested columns ---
+    raw_cols = [c for c in col_keys if c != "n_obs"]
+    use_n_obs = "n_obs" in col_keys
+
+    # --- aggregate means for raw columns ---
+    df_agg = (
+        adata.obs
+        .groupby(category_col, as_index=False)[raw_cols]
+        .mean()
+    )
+
+    # --- optionally compute n_obs ---
+    if use_n_obs:
+        df_count = (
+            adata.obs
+            .groupby(category_col)
+            .size()
+            .reset_index(name="n_obs")
+        )
+        df_agg = df_agg.merge(df_count, on=category_col)
+
+    # --- columns to plot ---
+    plot_cols = raw_cols + (["n_obs"] if use_n_obs else [])
+
+    # --- validate sort column ---
+    if sort_by not in plot_cols:
+        raise ValueError(
+            f"sort_by='{sort_by}' not in col_keys. "
+            f"Available columns: {plot_cols}"
+        )
+
+    # --- normalize (optional) ---
+    if normalize:
+        df_plot = df_agg.copy()
+
+        denom = df_plot[plot_cols].max() - df_plot[plot_cols].min()
+        denom = denom.replace(0, 1)
+
+        df_plot[plot_cols] = (
+            df_plot[plot_cols] - df_plot[plot_cols].min()
+        ) / denom
+        y_label = "Normalized value (0–1)"
+    else:
+        df_plot = df_agg.copy()
+        y_label = "Value"
+
+    # --- sort (always on plotted values) ---
+    df_plot = df_plot.sort_values(by=sort_by).reset_index(drop=True)
+
+    # --- plot ---
+    plt.figure(figsize=(8, 5))
+
+    for col in plot_cols:
+        is_sort = col == sort_by
+
+        plt.plot(
+            df_plot.index,
+            df_plot[col],
+            label=col,
+            alpha=1.0 if is_sort else 0.4,
+            linewidth=3 if is_sort else 2,
+            zorder=10 if is_sort else 1
+        )
+
+    plt.xlabel(f"niches sorted by {sort_by}")
+    plt.ylabel(y_label)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
