@@ -50,43 +50,55 @@ def fit_gmm(adata, distance_key, k_range, random_state=0, covariance_type="full"
 
     return results
 
-def choose_component(results, delta_bic_threshold=10.0):
+def choose_component(results, criterion='icl', delta_bic_threshold=10.0):
     """
-    Select optimal GMM using ICL with ΔBIC safeguard.
+    Select optimal GMM using a specified criterion (BIC, AIC, or ICL) 
+    with a Delta-BIC safeguard.
+
+    Parameters
+    ----------
+    results : dict
+        Dictionary containing GMM results for each K.
+    criterion : str, default='icl'
+        The metric to minimize ('bic', 'aic', 'icl').
+    delta_bic_threshold : float, default=10.0
+        Threshold for BIC improvement required to reject K=1.
 
     Returns
     -------
     selection : dict
         Contains optimal K, labels, and diagnostics.
     """
+    valid_criteria = ['bic', 'aic', 'icl']
+    if criterion not in valid_criteria:
+        raise ValueError(f"Invalid criterion '{criterion}'. Must be one of {valid_criteria}.")
+
     ks = sorted(results.keys())
 
-    bic = {}
-    aic = {}
-    icl = {}
+    metrics = {
+        "bic": {k: results[k]["bic"] for k in ks},
+        "aic": {k: results[k]["aic"] for k in ks},
+        "icl": {k: results[k]["icl"] for k in ks}
+    }
 
-    for k in ks:
-        bic[k] = results[k]["bic"]
-        aic[k] = results[k]["aic"]
-        icl[k] = results[k]["icl"]
+    target_metric = metrics[criterion]
+    k_optimal = min(target_metric, key=target_metric.get)
 
-    # ICL-optimal K
-    k_icl = min(icl, key=icl.get)
+    bic_vals = metrics["bic"]
+    delta_bic = bic_vals[1] - bic_vals[k_optimal]
+    
+    passed_delta_bic = (k_optimal == 1) or (delta_bic > delta_bic_threshold)
 
-    # ΔBIC check against K=1
-    delta_bic = bic[1] - bic[k_icl]
-    passed_delta_bic = (k_icl == 1) or (delta_bic > delta_bic_threshold)
-
-    # Conservative fallback
     if not passed_delta_bic:
-        k_icl = 1
+        k_optimal = 1
 
     return {
-        "optimal_k": k_icl,
-        "labels": results[k_icl]["labels"],
-        "bic": bic,
-        "aic": aic,
-        "icl": icl,
+        "optimal_k": k_optimal,
+        "labels": results[k_optimal]["labels"],
+        "criterion_used": criterion,
+        "bic": metrics["bic"],
+        "aic": metrics["aic"],
+        "icl": metrics["icl"],
         "passed_delta_bic": passed_delta_bic,
     }
 

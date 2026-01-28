@@ -5,7 +5,7 @@ from anndata import AnnData
 import squidpy as sq
 import scipy.sparse as sp
 
-def get_distances(adata: AnnData | SpatialData, k=1, log=True):
+def get_distances(adata: AnnData | SpatialData, k=1, log=True, transform="log"):
     """For each cell get the distance to its k-th nearest neighbor.
     
     Returns
@@ -16,8 +16,11 @@ def get_distances(adata: AnnData | SpatialData, k=1, log=True):
     adata = adata.tables["table"] if isinstance(adata, SpatialData) else adata
     sq.gr.spatial_neighbors(adata, coord_type="generic", n_neighs=k)
     distances = adata.obsp["spatial_distances"].data
-    if log:
+    if log and transform == "log":
         distances = np.log(distances)
+    elif log and transform == "log1p":
+        distances = np.log(1 + distances)
+    
     adata.obs[f"{k}_nn_distance"] = distances
 
 def get_neighbors(adata, type, gmm_labels, n=10):
