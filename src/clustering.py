@@ -162,7 +162,7 @@ def _watershed(adata, distances_key, spatial_connectivity_key, labels_key):
     n = len(labels)
 
     # Get sparse adjacency graph in CSR format
-    graph = adata.obsp[spatial_connectivity_key].tocsr()
+    graph = adata.obsp[spatial_connectivity_key]
 
     # Priority queue initialization: seeds
     pq = [(h[i], i) for i in range(n) if labels[i] > 0]
@@ -281,4 +281,63 @@ def cluster_domains(
     else:
         raise ValueError(f"Unknown flavor '{flavor}'")
 
+    return labels
+
+def watershed_by_descent(
+    adata,
+    distances_key,
+    spatial_connectivity_key="spatial_connectivities",
+):
+    h = adata.obs[distances_key].to_numpy()
+
+    graph = adata.obsp[spatial_connectivity_key].tocsr()
+    graph = graph.maximum(graph.T)
+    graph.eliminate_zeros()
+
+    n = graph.shape[0]
+
+    indptr = graph.indptr
+    indices = graph.indices
+
+    parent = np.full(n, -1, dtype=int)
+
+    # --- build steepest descent pointers
+    for i in range(n):
+        hi = h[i]
+        best_j = -1
+        best_h = hi
+
+        for j in indices[indptr[i]:indptr[i+1]]:
+            hj = h[j]
+            if hj < best_h:
+                best_h = hj
+                best_j = j
+
+        parent[i] = best_j   # -1 means local minimum
+
+    # --- assign labels by following descent paths
+    labels = np.zeros(n, dtype=np.int32)
+    current = 1
+
+    for i in range(n):
+        if parent[i] == -1:
+            labels[i] = current
+            current += 1
+
+    # path compression
+    def find_root(i):
+        path = []
+        while parent[i] != -1 and labels[i] == 0:
+            path.append(i)
+            i = parent[i]
+        root_label = labels[i]
+        for k in path:
+            labels[k] = root_label
+        return root_label
+
+    for i in range(n):
+        if labels[i] == 0:
+            find_root(i)
+
+    adata.obs["watershed_by_descent"] = pd.Categorical(labels)
     return labels

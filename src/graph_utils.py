@@ -23,66 +23,84 @@ def get_distances(adata: AnnData | SpatialData, k=1, log=True, transform="log"):
     
     adata.obs[f"{k}_nn_distance"] = distances
 
-def get_neighbors(adata, type, gmm_labels, n=10):
+def get_neighbors(adata, type, n=10):
     if type == "delaunay":
-        sq.gr.spatial_neighbors(adata, library_key=gmm_labels, coord_type="generic", delaunay=True)
+        sq.gr.spatial_neighbors(adata, coord_type="generic", delaunay=True)
     elif type =="knn":
-        sq.gr.spatial_neighbors(adata, library_key=gmm_labels,coord_type="generic", n_neighs=n)
-
-# not yet tested!
-def prune_graph(adata, type, threshold=None, percentile=None):
-    A = adata.obsp["spatial_connectivities"].tocsr()
-    D = adata.obsp["spatial_distances"].tocsr()
-
-    # Convert to COO for masking
-    A_coo = A.tocoo()
-    D_coo = D.tocoo()
-
-    if type == "threshold":
-        mask = D_coo.data <= threshold
-
-    elif type == "percentile":
-        cutoff = np.percentile(D_coo.data, percentile)
-        mask = D_coo.data <= cutoff
-
-    else:
-        raise ValueError("type must be 'threshold' or 'percentile'")
-
-    # Prune adjacency
-    A_pruned = sp.coo_matrix(
-        (A_coo.data[mask], (A_coo.row[mask], A_coo.col[mask])),
-        shape=A.shape
-    ).tocsr()
-
-    # Prune distances (same mask)
-    D_pruned = sp.coo_matrix(
-        (D_coo.data[mask], (D_coo.row[mask], D_coo.col[mask])),
-        shape=D.shape
-    ).tocsr()
-
-    adata.obsp["spatial_connectivities_pruned"] = A_pruned
-    adata.obsp["spatial_distances_pruned"] = D_pruned
+        sq.gr.spatial_neighbors(adata, coord_type="generic", n_neighs=n)
 
 
-def set_seeds(adata, distances_key, spatial_connectivity_key="spatial_connectivities"):
-    
-    graph = adata.obsp[spatial_connectivity_key].tocsr()
-    n = graph.shape[0]
-    distances = adata.obs[distances_key].values
+def prune_graph(adata, gmm_key):
 
-    labels = np.zeros(n, dtype=int)
-    current_label = 1
+    A = adata.obsp["spatial_connectivities"]
+    D = adata.obsp["spatial_distances"]
+    indptr = A.indptr
+    indices = A.indices
 
-    for i in range(n):
-        # indices of neighbors of i (excluding self if present)
-        neighbors = graph.indices[graph.indptr[i]:graph.indptr[i+1]]
-        neighbors = neighbors[neighbors != i]
+    for i in range(A.shape[0]):
+        start, end = indptr[i], indptr[i + 1]
 
-        if neighbors.size == 0:
+        if start == end:
             continue
 
-        # local minimum condition
-        if np.all(distances[i] < distances[neighbors]):
+        row_label = adata.obs[gmm_key][i]
+        neigh = indices[start:end]
+
+        # mask of edges to KEEP
+        keep = adata.obs[gmm_key][neigh] == row_label
+
+        # set pruned entries to zero (both matrices)
+        drop = ~keep
+        if np.any(drop):
+            A.data[start:end][drop] = 0.0
+            D.data[start:end][drop] = 0.0
+
+    # actually remove the zeros from the sparse structure
+    A.eliminate_zeros()
+    D.eliminate_zeros()
+    
+    adata.obsp["pruned_spatial_connectivities"] = A
+    adata.obsp["pruned_spatial_distances"] = D
+
+
+def set_seeds(
+    adata,
+    distances_key,
+    spatial_connectivity_key="spatial_connectivities",
+    min_neighbors=1,
+):
+    # build undirected, clean graph
+    graph = adata.obsp[spatial_connectivity_key].tocsr()
+    graph = graph.maximum(graph.T)
+    graph.eliminate_zeros()
+
+    distances = adata.obs[distances_key].to_numpy()
+    n = graph.shape[0]
+
+    labels = np.zeros(n, dtype=np.int32)
+    current_label = 1
+
+    indptr = graph.indptr
+    indices = graph.indices
+
+    for i in range(n):
+
+        start, end = indptr[i], indptr[i + 1]
+        if start == end:
+            continue
+
+        neigh = indices[start:end]
+
+        # remove self
+        neigh = neigh[neigh != i]
+
+        if neigh.size < min_neighbors:
+            continue
+
+        di = distances[i]
+
+        # strictly lower than all neighbors
+        if np.all(di < distances[neigh]):
             labels[i] = current_label
             current_label += 1
 

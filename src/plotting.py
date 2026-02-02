@@ -6,33 +6,46 @@ import squidpy as sq
 import math
 from spatialdata import SpatialData
 
+
 def assign_colors(sdata, column_key, seed=42):
     """
-    Assign unique colors to each category in a given column. 
+    Assign unique colors to each category in a given column.
+    Category 0 is always assigned grey.
     """
+
+    obs = sdata.tables["table"].obs[column_key]
+
+    # get sorted unique categories
+    cats = np.array(sorted(obs.unique()))
+
     rng = np.random.default_rng(seed)
 
     colors = []
     seen = set()
-    n_colors = sdata.tables["table"].obs[column_key].nunique()
 
-    while len(colors) < n_colors:
-        # Sample continuous HSV
-        h = rng.random()
-        s = rng.uniform(0.6, 1.0)  # avoid washed-out colors
-        v = rng.uniform(0.7, 1.0)
+    for c in cats:
+        if c == 0:
+            # fixed color for background / unassigned
+            colors.append("#333333")  # dark grey
+            continue
 
-        rgb = mcolors.hsv_to_rgb((h, s, v))
-        hex_color = mcolors.to_hex(rgb, keep_alpha=False)
+        # sample until we get a new color
+        while True:
+            h = rng.random()
+            s = rng.uniform(0.6, 1.0)
+            v = rng.uniform(0.7, 1.0)
 
-        if hex_color not in seen:
-            seen.add(hex_color)
-            colors.append(hex_color)
+            rgb = mcolors.hsv_to_rgb((h, s, v))
+            hex_color = mcolors.to_hex(rgb, keep_alpha=False)
+
+            if hex_color not in seen:
+                seen.add(hex_color)
+                colors.append(hex_color)
+                break
 
     sdata.tables["table"].uns[f"{column_key}_colors"] = colors
-    
-import matplotlib.pyplot as plt
 
+    
 def plot_scores(data):
     scores = ["bic", "aic", "icl"]
     
@@ -267,9 +280,17 @@ def plot_niche_stats(
     raw_cols = [c for c in col_keys if c != "n_obs"]
     use_n_obs = "n_obs" in col_keys
 
+    # -------------------------------------------------
+    # exclude category 0 only when n_obs is involved
+    # -------------------------------------------------
+    if use_n_obs:
+        obs_use = adata.obs[adata.obs[category_col] != 0]
+    else:
+        obs_use = adata.obs
+
     # --- aggregate means for raw columns ---
     df_agg = (
-        adata.obs
+        obs_use
         .groupby(category_col, as_index=False)[raw_cols]
         .mean()
     )
@@ -277,7 +298,7 @@ def plot_niche_stats(
     # --- optionally compute n_obs ---
     if use_n_obs:
         df_count = (
-            adata.obs
+            obs_use
             .groupby(category_col)
             .size()
             .reset_index(name="n_obs")
@@ -332,8 +353,6 @@ def plot_niche_stats(
     plt.legend()
     plt.tight_layout()
     plt.show()
-
-
 
 
 def plot_knn_histogram(adata, k=1, bins=50, title=None, ax=None, color='#4c72b0', kde=True, **kwargs):
