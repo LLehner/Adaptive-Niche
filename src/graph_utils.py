@@ -29,13 +29,37 @@ def get_neighbors(adata, type, n=10):
     elif type =="knn":
         sq.gr.spatial_neighbors(adata, coord_type="generic", n_neighs=n)
 
+def prune_graph(adata, gmm_key, prune_by="label", distance_key=None, n_std=2.0):
+    """
+    Prunes the spatial graph.
+    
+    If prune_by="distance":
+    1. Calculates thresholds using GMM stats (assumed to be from log-data).
+    2. Takes the LOG of the graph's spatial_distances.
+    3. Compares: log(graph_distance) > (Mean + n*Std).
+    """
 
-def prune_graph(adata, gmm_key):
-
-    A = adata.obsp["spatial_connectivities"]
-    D = adata.obsp["spatial_distances"]
+    # CRITICAL: Use .copy() to avoid destroying the original spatial_connectivities in-place
+    A = adata.obsp["spatial_connectivities"].copy()
+    D = adata.obsp["spatial_distances"].copy()
+    
     indptr = A.indptr
     indices = A.indices
+
+    if prune_by == "distance":
+        if distance_key is None:
+            raise ValueError("You must provide `distance_key` when using `prune_by='distance'`.")
+        
+        # 1. Group by GMM component and calculate stats (on already logged data)
+        stats = adata.obs.groupby(gmm_key, observed=False)[distance_key].agg(['mean', 'std'])
+        stats['std'] = stats['std'].fillna(0)
+        
+        # 2. Define threshold in LOG space
+        stats['log_threshold'] = stats['mean'] + (n_std * stats['std'])
+        
+        # 3. Map thresholds to cells (no exp conversion needed here)
+        mapping_dict = stats['log_threshold'].to_dict()
+        cell_thresholds = adata.obs[gmm_key].map(mapping_dict).astype(float).values
 
     for i in range(A.shape[0]):
         start, end = indptr[i], indptr[i + 1]
@@ -43,24 +67,41 @@ def prune_graph(adata, gmm_key):
         if start == end:
             continue
 
-        row_label = adata.obs[gmm_key][i]
-        neigh = indices[start:end]
+        neigh_indices = indices[start:end]
 
-        # mask of edges to KEEP
-        keep = adata.obs[gmm_key][neigh] == row_label
+        if prune_by == "label":
+            row_label = adata.obs[gmm_key][i]
+            neigh_labels = adata.obs[gmm_key][neigh_indices]
+            keep = neigh_labels == row_label
+            drop = ~keep
 
-        # set pruned entries to zero (both matrices)
-        drop = ~keep
+        elif prune_by == "distance":
+            # Get physical edge lengths
+            raw_edge_lengths = D.data[start:end]
+            
+            # Log-transform the graph edges to match the domain of the GMM stats
+            # Adding a tiny epsilon to avoid log(0) if duplicate cells exist
+            log_edge_lengths = np.log(raw_edge_lengths + 1e-12)
+            
+            # Get the max log-threshold for this cell
+            max_log_allowed = cell_thresholds[i]
+            
+            # Prune if log(dist) > log(threshold)
+            drop = log_edge_lengths > max_log_allowed
+
+        # Apply pruning
         if np.any(drop):
             A.data[start:end][drop] = 0.0
             D.data[start:end][drop] = 0.0
 
-    # actually remove the zeros from the sparse structure
+    # Cleanup
     A.eliminate_zeros()
     D.eliminate_zeros()
     
     adata.obsp["pruned_spatial_connectivities"] = A
     adata.obsp["pruned_spatial_distances"] = D
+    
+    print(f"Graph pruned by '{prune_by}'. stored in 'pruned_spatial_connectivities'.")
 
 
 def set_seeds(
