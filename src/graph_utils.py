@@ -23,7 +23,7 @@ def get_distances(adata: AnnData | SpatialData, k=1, log=True, transform="log"):
     
     adata.obs[f"{k}_nn_distance"] = distances
 
-def get_neighbors(adata, type, n=10):
+def get_neighbors(adata, type, n=40):
     if type == "delaunay":
         sq.gr.spatial_neighbors(adata, coord_type="generic", delaunay=True)
     elif type =="knn":
