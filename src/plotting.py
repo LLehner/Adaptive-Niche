@@ -5,7 +5,7 @@ import numpy as np
 import squidpy as sq
 import math
 from spatialdata import SpatialData
-
+from matplotlib.collections import LineCollection
 
 def assign_colors(sdata, column_key, seed=42):
     """
@@ -92,40 +92,6 @@ def plot_scores(data):
     plt.show()
 
 
-def plot_knn_distance(adata, distance_key, **kwargs):
-    """
-    Plots the spatial scatter colored by the k-th nearest neighbor distance.
-    
-    Parameters
-    ----------
-    adata : AnnData
-        The annotated data matrix.
-    distance_key : str
-        The key in adata.obs used to color the plot (e.g., '1_nn_distance').
-    **kwargs
-        Additional arguments passed to sq.pl.spatial_scatter (e.g., size, cmap, shape).
-    """
-    key = distance_key
-    
-    # Safety check
-    if key not in adata.obs:
-        raise ValueError(f"Key '{key}' not found in adata.obs. Please run get_distances(adata, k={distance_key}) first.")
-
-    # Set default title if not provided in kwargs
-    title = kwargs.pop("title", f"Log Distance to {distance_key}-th NN")
-    
-    # Set default cmap if not provided
-    if "cmap" not in kwargs:
-        kwargs["cmap"] = "viridis"
-
-    sq.pl.spatial_scatter(
-        adata,
-        color=key,
-        title=title,
-        shape=None,
-        **kwargs
-    )
-
 def plot_knn_by_regime(adata, labels_key="gmm_labels", k=1, cmap="viridis", size=1, figsize=None):
     """
     Plots the k-th NN distances split by density regimes (labels_key) side-by-side.
@@ -209,63 +175,6 @@ def plot_knn_by_regime(adata, labels_key="gmm_labels", k=1, cmap="viridis", size
 
     plt.suptitle(f"Spatial Density Regimes ({labels_key})", fontsize=16)
 
-def plot_niches(data, niche_key="watershed_niches", size=3, dpi=300, output_path=None, title=None, ax=None):
-    """
-    Plots spatial niches using Squidpy with consistent coloring.
-    
-    Parameters
-    ----------
-    data : SpatialData | AnnData
-        The SpatialData object (or AnnData). 
-        If SpatialData, it extracts the table automatically.
-    niche_key : str
-        The key in .obs containing the niche/cluster labels.
-    size : float
-        Point size for the scatter plot.
-    dpi : int
-        Resolution for saving/plotting.
-    output_path : str, optional
-        If provided, saves the figure to this path (e.g., "niches.png").
-    title : str, optional
-        Custom title. If None, uses "Spatial Domains: {niche_key}".
-    ax : matplotlib.axes.Axes, optional
-        A specific axes to plot on. If None, creates a new figure.
-    """
-    
-    if isinstance(data, SpatialData):
-        adata = data.tables["table"]
-        assign_colors(data, niche_key)
-    else:
-        adata = data
-        try:
-            assign_colors(adata, niche_key)
-        except:
-            pass 
-
-    if niche_key in adata.obs:
-        adata.obs[niche_key] = adata.obs[niche_key].astype("category")
-
-    if title is None:
-        title = f"Spatial Domains: {niche_key}"
-
-    sq.pl.spatial_scatter(
-        adata,
-        color=niche_key,
-        size=size,
-        title=title,
-        shape=None,      # Faster rendering for pure points
-        legend_loc=None, # Hides legend (as requested in your snippet)
-        ax=ax,
-        dpi=dpi,
-        figsize=(10, 10) if ax is None else None
-    )
-
-    if output_path:
-        plt.savefig(output_path, dpi=dpi, bbox_inches='tight')
-        print(f"Saved plot to {output_path}")
-    
-    if ax is None and not output_path:
-        plt.show()
         
 def plot_niche_stats(
     adata,
@@ -409,3 +318,101 @@ def plot_knn_histogram(adata, k=1, bins=50, title=None, ax=None, color='#4c72b0'
     
     if ax is None:
         plt.show()
+        
+def plot_pruned_connections(
+    adata, 
+    gmm_key, 
+    basis="spatial", 
+    prune_by="label", 
+    distance_key=None, 
+    n_std=2.0, 
+    point_size=5,
+    mode="comparison",
+    ax=None,
+    figsize=(16, 8)
+):
+    """
+    Visualizes graph pruning.
+    If prune_by="distance", compares log(spatial_distances) vs log-thresholds.
+    """
+    
+    # --- 1. Data Retrieval ---
+    if f"X_{basis}" in adata.obsm:
+        coords = adata.obsm[f"X_{basis}"]
+    elif basis in adata.obsm:
+        coords = adata.obsm[basis]
+    else:
+        raise KeyError(f"Could not find coordinates in adata.obsm['{basis}']")
+
+    adj_matrix = adata.obsp["spatial_distances"].tocoo()
+    sources = adj_matrix.row
+    targets = adj_matrix.col
+    weights = adj_matrix.data # These are linear distances
+    
+    # --- 2. Determine Edges to Keep ---
+    labels = adata.obs[gmm_key].values
+
+    if prune_by == "label":
+        edge_is_kept = labels[sources] == labels[targets]
+
+    elif prune_by == "distance":
+        if distance_key is None:
+            raise ValueError("Must provide 'distance_key' when prune_by='distance'")
+            
+        # Stats on LOG values
+        stats = adata.obs.groupby(gmm_key, observed=False)[distance_key].agg(['mean', 'std'])
+        stats['std'] = stats['std'].fillna(0)
+        
+        # Calc LOG threshold
+        stats['log_threshold'] = stats['mean'] + (n_std * stats['std'])
+        
+        # Map to cells
+        mapping_dict = stats['log_threshold'].to_dict()
+        cell_thresholds = adata.obs[gmm_key].map(mapping_dict).astype(float).values
+        
+        # Log the graph weights
+        log_weights = np.log(weights + 1e-12)
+        
+        # Compare Log Weights vs Log Thresholds
+        thresholds_per_edge = cell_thresholds[sources]
+        edge_is_kept = log_weights <= thresholds_per_edge
+        
+    else:
+        raise ValueError(f"Unknown pruning strategy: {prune_by}")
+
+    # --- 3. Build Segments ---
+    start_points = coords[sources]
+    end_points = coords[targets]
+    segments = np.stack((start_points, end_points), axis=1)
+
+    kept_segments = segments[edge_is_kept]
+    pruned_segments = segments[~edge_is_kept]
+    
+    n_kept = len(kept_segments)
+    n_pruned = len(pruned_segments)
+
+    # --- 4. Plotting ---
+    def draw_graph(axis, show_pruned=True, title=""):
+        axis.scatter(coords[:, 0], coords[:, 1], c=labels, s=point_size, cmap='tab20', zorder=10)
+        
+        lc_kept = LineCollection(kept_segments, colors='lightgray', linewidths=0.5, alpha=0.5, zorder=1)
+        axis.add_collection(lc_kept)
+        
+        if show_pruned:
+            lc_pruned = LineCollection(pruned_segments, colors='red', linewidths=1.0, alpha=0.8, zorder=5)
+            axis.add_collection(lc_pruned)
+            
+        axis.set_title(title)
+        axis.axis('equal')
+        axis.axis('off')
+
+    if mode == "comparison":
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+        draw_graph(ax1, show_pruned=True, title=f"Candidates (Red)\ntotal connections: {n_pruned + n_kept}")
+        draw_graph(ax2, show_pruned=False, title=f"Final Graph\nconnections after pruning: {n_kept}")
+        return fig, (ax1, ax2)
+    else:
+        if ax is None: fig, ax = plt.subplots(figsize=(8, 8))
+        show_p = (mode == "highlight")
+        draw_graph(ax, show_pruned=show_p, title=f"Graph ({mode})")
+        return ax
