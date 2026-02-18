@@ -287,6 +287,7 @@ def watershed_by_descent(
     adata,
     distances_key,
     spatial_connectivity_key="spatial_connectivities",
+    niche_key="watershed_by_descent"
 ):
     h = adata.obs[distances_key].to_numpy()
 
@@ -339,5 +340,5 @@ def watershed_by_descent(
         if labels[i] == 0:
             find_root(i)
 
-    adata.obs["watershed_by_descent"] = pd.Categorical(labels)
+    adata.obs[niche_key] = pd.Categorical(labels)
     return labels
