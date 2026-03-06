@@ -8,8 +8,9 @@ from sklearn.mixture import GaussianMixture
 from sklearn.cluster import KMeans,DBSCAN
 import igraph as ig
 import leidenalg as la
+from src import plotting, graph_utils
 
-def fit_gmm(adata, distance_key, k_range, random_state=0, covariance_type="full", reg_covar=1e-6):
+def fit_gmm(adata, nn_distance, k_range, criterion="icl", delta_bic_threshold=10.0, random_state=0, covariance_type="full", reg_covar=1e-6):
     """
     Fit 1D GMMs over a range of components.
 
@@ -18,7 +19,9 @@ def fit_gmm(adata, distance_key, k_range, random_state=0, covariance_type="full"
     results : dict
         Keys are K, values are dicts with fitted model outputs.
     """
-    distances = adata.obs[distance_key].values.reshape(-1, 1)
+    graph_utils.get_distances(adata, k=nn_distance)
+    
+    distances = adata.obs[f"{nn_distance}_nn_distance"].values.reshape(-1, 1)
     n = distances.shape[0]
 
     results = {}
@@ -47,10 +50,12 @@ def fit_gmm(adata, distance_key, k_range, random_state=0, covariance_type="full"
             "n_params": gmm._n_parameters(),
         }
         print(f"Fitted GMM with k={k}")
+    
+    optimal_component = _choose_component(results, criterion, delta_bic_threshold)
+    adata.obs["gmm_labels"] = optimal_component["labels"]
 
-    return results
 
-def choose_component(results, criterion='icl', delta_bic_threshold=10.0):
+def _choose_component(results, criterion='icl', delta_bic_threshold=10.0):
     """
     Select optimal GMM using a specified criterion (BIC, AIC, or ICL) 
     with a Delta-BIC safeguard.
@@ -154,136 +159,138 @@ def cluster_stability(adata, distance_key, k, n_repeats=50, subsample_fraction=0
         "ari_scores": ari_scores,
     }
 
-def _watershed(adata, distances_key, spatial_connectivity_key, labels_key):
-    """performs watershed-like 'segmentation' on graph based on scalar distance values using priority queue."""
-    # Get scalar values
-    h = adata.obs[distances_key].values
-    labels = adata.obs[labels_key].values.copy()
-    n = len(labels)
+# DEPRECATED
+# def _watershed(adata, distances_key, spatial_connectivity_key, labels_key):
+#     """performs watershed-like 'segmentation' on graph based on scalar distance values using priority queue."""
+#     # Get scalar values
+#     h = adata.obs[distances_key].values
+#     labels = adata.obs[labels_key].values.copy()
+#     n = len(labels)
 
-    # Get sparse adjacency graph in CSR format
-    graph = adata.obsp[spatial_connectivity_key]
+#     # Get sparse adjacency graph in CSR format
+#     graph = adata.obsp[spatial_connectivity_key]
 
-    # Priority queue initialization: seeds
-    pq = [(h[i], i) for i in range(n) if labels[i] > 0]
-    heapq.heapify(pq)
+#     # Priority queue initialization: seeds
+#     pq = [(h[i], i) for i in range(n) if labels[i] > 0]
+#     heapq.heapify(pq)
 
-    # Visited mask
-    visited = labels > 0
+#     # Visited mask
+#     visited = labels > 0
 
-    while pq:
-        _, i = heapq.heappop(pq)
+#     while pq:
+#         _, i = heapq.heappop(pq)
 
-        # Retrieve neighbors from sparse row
-        neighbors = graph.indices[graph.indptr[i]:graph.indptr[i + 1]]
+#         # Retrieve neighbors from sparse row
+#         neighbors = graph.indices[graph.indptr[i]:graph.indptr[i + 1]]
 
-        for j in neighbors:
-            if not visited[j]:
-                labels[j] = labels[i]     # propagate basin label
-                visited[j] = True
-                heapq.heappush(pq, (h[j], j))
+#         for j in neighbors:
+#             if not visited[j]:
+#                 labels[j] = labels[i]     # propagate basin label
+#                 visited[j] = True
+#                 heapq.heappush(pq, (h[j], j))
 
-    return labels
+#     return labels
 
-def cluster_domains(
-    adata,
-    spatial_connectivity_key="spatial_connectivities",
-    flavor="leiden",
-    distances_key="distances",
-    seeds_key="watershed_seeds",
-    n_clusters=100,
-    resolution=1.0,
-    eps=10,
-    min_samples=5,
-    random_state=0
-):
-    """
-    Cluster a sparse adjacency matrix using either Leiden (graph-based)
-    or KMeans (row-wise embedding of adjacency).
+# DEPRECATED
+# def cluster_domains(
+#     adata,
+#     spatial_connectivity_key="spatial_connectivities",
+#     flavor="leiden",
+#     distances_key="distances",
+#     seeds_key="watershed_seeds",
+#     n_clusters=100,
+#     resolution=1.0,
+#     eps=10,
+#     min_samples=5,
+#     random_state=0
+# ):
+#     """
+#     Cluster a sparse adjacency matrix using either Leiden (graph-based)
+#     or KMeans (row-wise embedding of adjacency).
 
-    Parameters
-    ----------
-    adata : AnnData
-        Annotated data matrix
-    spatial_connectivity_key : str
-        Key in adata.obsp for adjacency matrix
-    flavor : {"watershed", "leiden", "kmeans", "dbscan"}
-        Clustering method
-    distances_key : str
-        Key in adata.obs for distances (used only for watershed)
-    n_clusters : int
-        Number of clusters (used only for kmeans)
-    resolution : float
-        Leiden resolution parameter
-    random_state : int
-        Random seed
+#     Parameters
+#     ----------
+#     adata : AnnData
+#         Annotated data matrix
+#     spatial_connectivity_key : str
+#         Key in adata.obsp for adjacency matrix
+#     flavor : {"watershed", "leiden", "kmeans", "dbscan"}
+#         Clustering method
+#     distances_key : str
+#         Key in adata.obs for distances (used only for watershed)
+#     n_clusters : int
+#         Number of clusters (used only for kmeans)
+#     resolution : float
+#         Leiden resolution parameter
+#     random_state : int
+#         Random seed
 
-    Returns
-    -------
-    labels : np.ndarray (shape: N)
-        Updates adata.obs with cluster labels under keys.
-    """
+#     Returns
+#     -------
+#     labels : np.ndarray (shape: N)
+#         Updates adata.obs with cluster labels under keys.
+#     """
     
-    if flavor == "watershed":
-        labels = _watershed(
-            adata,
-            distances_key=distances_key,
-            spatial_connectivity_key=spatial_connectivity_key,
-            labels_key=seeds_key
-        )
-        adata.obs["watershed_niches"] = pd.Categorical(labels)
+#     if flavor == "watershed":
+#         labels = _watershed(
+#             adata,
+#             distances_key=distances_key,
+#             spatial_connectivity_key=spatial_connectivity_key,
+#             labels_key=seeds_key
+#         )
+#         adata.obs["watershed_niches"] = pd.Categorical(labels)
 
-    elif flavor == "leiden":
-        sources, targets = adata.obsp[spatial_connectivity_key].nonzero()
+#     elif flavor == "leiden":
+#         sources, targets = adata.obsp[spatial_connectivity_key].nonzero()
 
-        g = ig.Graph(
-            n=adata.n_obs,
-            edges=list(zip(sources, targets)),
-            edge_attrs={"weight": None},
-            directed=False
-        )
+#         g = ig.Graph(
+#             n=adata.n_obs,
+#             edges=list(zip(sources, targets)),
+#             edge_attrs={"weight": None},
+#             directed=False
+#         )
 
-        partition = la.find_partition(
-            g,
-            la.RBConfigurationVertexPartition,
-            weights=None,
-            resolution_parameter=resolution,
-            seed=random_state
-        )
+#         partition = la.find_partition(
+#             g,
+#             la.RBConfigurationVertexPartition,
+#             weights=None,
+#             resolution_parameter=resolution,
+#             seed=random_state
+#         )
 
-        labels = np.array(partition.membership)
-        adata.obs["leiden_niches"] = pd.Categorical(labels)
+#         labels = np.array(partition.membership)
+#         adata.obs["leiden_niches"] = pd.Categorical(labels)
 
-    elif flavor == "kmeans":
-        X = adata.obs[distances_key].values.reshape(-1, 1)
+#     elif flavor == "kmeans":
+#         X = adata.obs[distances_key].values.reshape(-1, 1)
 
-        km = KMeans(
-            n_clusters=n_clusters,
-            random_state=random_state,
-            n_init="auto"
-        )
+#         km = KMeans(
+#             n_clusters=n_clusters,
+#             random_state=random_state,
+#             n_init="auto"
+#         )
 
-        labels = km.fit_predict(X)
-        adata.obs["kmeans_niches"] = pd.Categorical(labels)
+#         labels = km.fit_predict(X)
+#         adata.obs["kmeans_niches"] = pd.Categorical(labels)
     
-    elif flavor == "dbscan":
-        coords = adata.obsm["spatial"]
+#     elif flavor == "dbscan":
+#         coords = adata.obsm["spatial"]
 
-        db = DBSCAN(
-            eps=eps,
-            min_samples=min_samples,
-            metric="euclidean",
-            n_jobs=-1
-        )
+#         db = DBSCAN(
+#             eps=eps,
+#             min_samples=min_samples,
+#             metric="euclidean",
+#             n_jobs=-1
+#         )
 
-        labels = db.fit_predict(coords)
-        adata.obs["dbscan_niches"] = pd.Categorical(labels)
-    else:
-        raise ValueError(f"Unknown flavor '{flavor}'")
+#         labels = db.fit_predict(coords)
+#         adata.obs["dbscan_niches"] = pd.Categorical(labels)
+#     else:
+#         raise ValueError(f"Unknown flavor '{flavor}'")
 
-    return labels
+#     return labels
 
-def watershed_by_descent(
+def watershed(
     adata,
     distances_key,
     spatial_connectivity_key="spatial_connectivities",
@@ -341,4 +348,5 @@ def watershed_by_descent(
             find_root(i)
 
     adata.obs[niche_key] = pd.Categorical(labels)
-    return labels
+    print("assigning colors...")
+    plotting.assign_colors(adata, niche_key)

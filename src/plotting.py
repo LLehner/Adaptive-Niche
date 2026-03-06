@@ -7,13 +7,17 @@ import math
 from spatialdata import SpatialData
 from matplotlib.collections import LineCollection
 
-def assign_colors(sdata, column_key, seed=42):
+def assign_colors(adata, column_key, seed=42):
     """
     Assign unique colors to each category in a given column.
     Category 0 is always assigned grey.
     """
-
-    obs = sdata.tables["table"].obs[column_key]
+    if isinstance(adata, SpatialData):
+        adata = adata.tables["table"]
+    else:
+        adata = adata
+    
+    obs = adata.obs[column_key]
 
     # get sorted unique categories
     cats = np.array(sorted(obs.unique()))
@@ -43,7 +47,7 @@ def assign_colors(sdata, column_key, seed=42):
                 colors.append(hex_color)
                 break
 
-    sdata.tables["table"].uns[f"{column_key}_colors"] = colors
+    adata.uns[f"{column_key}_colors"] = colors
 
     
 def plot_scores(data):

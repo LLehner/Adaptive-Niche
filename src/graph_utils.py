@@ -23,11 +23,12 @@ def get_distances(adata: AnnData | SpatialData, k=1, log=True, transform="log"):
     
     adata.obs[f"{k}_nn_distance"] = distances
 
-def get_neighbors(adata, type, n=40):
-    if type == "delaunay":
-        sq.gr.spatial_neighbors(adata, coord_type="generic", delaunay=True)
-    elif type =="knn":
-        sq.gr.spatial_neighbors(adata, coord_type="generic", n_neighs=n)
+# DEPRECATED
+# def get_neighbors(adata, type, n=40):
+#     if type == "delaunay":
+#         sq.gr.spatial_neighbors(adata, coord_type="generic", delaunay=True)
+#     elif type =="knn":
+#         sq.gr.spatial_neighbors(adata, coord_type="generic", n_neighs=n)
 
 def prune_graph(adata, gmm_key, prune_by="label", distance_key=None, n_std=2.0):
     """
@@ -103,47 +104,48 @@ def prune_graph(adata, gmm_key, prune_by="label", distance_key=None, n_std=2.0):
     
     print(f"Graph pruned by '{prune_by}'. stored in 'pruned_spatial_connectivities'.")
 
+# DEPRECATED
+# def set_seeds(
+#     adata,
+#     distances_key,
+#     spatial_connectivity_key="spatial_connectivities",
+#     min_neighbors=1,
+# ):
+#     # build undirected, clean graph
+#     graph = adata.obsp[spatial_connectivity_key].tocsr()
+#     graph = graph.maximum(graph.T)
+#     graph.eliminate_zeros()
 
-def set_seeds(
-    adata,
-    distances_key,
-    spatial_connectivity_key="spatial_connectivities",
-    min_neighbors=1,
-):
-    # build undirected, clean graph
-    graph = adata.obsp[spatial_connectivity_key].tocsr()
-    graph = graph.maximum(graph.T)
-    graph.eliminate_zeros()
+#     distances = adata.obs[distances_key].to_numpy()
+#     n = graph.shape[0]
 
-    distances = adata.obs[distances_key].to_numpy()
-    n = graph.shape[0]
+#     labels = np.zeros(n, dtype=np.int32)
+#     current_label = 1
 
-    labels = np.zeros(n, dtype=np.int32)
-    current_label = 1
+#     indptr = graph.indptr
+#     indices = graph.indices
 
-    indptr = graph.indptr
-    indices = graph.indices
+#     for i in range(n):
 
-    for i in range(n):
+#         start, end = indptr[i], indptr[i + 1]
+#         if start == end:
+#             continue
 
-        start, end = indptr[i], indptr[i + 1]
-        if start == end:
-            continue
+#         neigh = indices[start:end]
 
-        neigh = indices[start:end]
+#         # remove self
+#         neigh = neigh[neigh != i]
 
-        # remove self
-        neigh = neigh[neigh != i]
+#         if neigh.size < min_neighbors:
+#             continue
 
-        if neigh.size < min_neighbors:
-            continue
+#         di = distances[i]
 
-        di = distances[i]
+#         # strictly lower than all neighbors
+#         if np.all(di < distances[neigh]):
+#             labels[i] = current_label
+#             current_label += 1
 
-        # strictly lower than all neighbors
-        if np.all(di < distances[neigh]):
-            labels[i] = current_label
-            current_label += 1
-
-    adata.obs["watershed_seeds"] = labels
+#     adata.obs["watershed_seeds"] = labels
+    
 
