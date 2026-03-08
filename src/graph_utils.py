@@ -103,6 +103,70 @@ def prune_graph(adata, gmm_key, prune_by="label", distance_key=None, n_std=2.0):
     adata.obsp["pruned_spatial_distances"] = D
     
     print(f"Graph pruned by '{prune_by}'. stored in 'pruned_spatial_connectivities'.")
+    
+import numpy as np
+import scipy.sparse as sp
+
+def prune_graph_new(adata, gmm_key, prune_by="label", distance_key=None, n_std=2.0):
+
+    A = adata.obsp["spatial_connectivities"].copy().tocsr()
+    D = adata.obsp["spatial_distances"].copy().tocsr()
+
+    if prune_by == "distance":
+        if distance_key is None:
+            raise ValueError("You must provide `distance_key` when using `prune_by='distance'`.")
+
+        stats = adata.obs.groupby(gmm_key, observed=False)[distance_key].agg(['mean', 'std'])
+        stats['std'] = stats['std'].fillna(0)
+
+        stats['log_threshold'] = stats['mean'] + (n_std * stats['std'])
+
+        mapping = stats['log_threshold'].to_dict()
+        cell_thresholds = adata.obs[gmm_key].map(mapping).astype(float).values
+
+    # Convert to COO for edge-wise processing
+    A_coo = A.tocoo()
+    D_coo = D.tocoo()
+
+    rows = A_coo.row
+    cols = A_coo.col
+    dists = D_coo.data
+
+    if prune_by == "label":
+
+        labels = adata.obs[gmm_key].values
+        keep = labels[rows] == labels[cols]
+
+    elif prune_by == "distance":
+
+        log_dists = np.log(dists + 1e-12)
+
+        thr_i = cell_thresholds[rows]
+        thr_j = cell_thresholds[cols]
+
+        # symmetric rule
+        edge_threshold = np.minimum(thr_i, thr_j)
+
+        keep = log_dists <= edge_threshold
+
+    # Apply pruning
+    new_data_A = A_coo.data * keep
+    new_data_D = D_coo.data * keep
+
+    A_pruned = sp.coo_matrix((new_data_A, (rows, cols)), shape=A.shape).tocsr()
+    D_pruned = sp.coo_matrix((new_data_D, (rows, cols)), shape=D.shape).tocsr()
+
+    A_pruned.eliminate_zeros()
+    D_pruned.eliminate_zeros()
+
+    # Force symmetry just in case
+    A_pruned = A_pruned.minimum(A_pruned.T)
+    D_pruned = D_pruned.minimum(D_pruned.T)
+
+    adata.obsp["pruned_spatial_connectivities"] = A_pruned
+    adata.obsp["pruned_spatial_distances"] = D_pruned
+
+    print(f"Graph pruned by '{prune_by}'. Stored in 'pruned_spatial_connectivities'.")
 
 # DEPRECATED
 # def set_seeds(
