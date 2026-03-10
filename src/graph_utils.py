@@ -5,24 +5,73 @@ from anndata import AnnData
 import squidpy as sq
 import scipy.sparse as sp
 
-def get_distances(adata: AnnData | SpatialData, k=1, log=True, transform="log"):
-    """For each cell get the distance to its k-th nearest neighbor.
+# def get_distances(adata: AnnData | SpatialData, k=1, log=True, transform="log"):
+#     """For each cell get the distance to its k-th nearest neighbor.
     
+#     Returns
+#     -------
+#     distances : array-like
+#         Array of distances to k-th nearest neighbor for each cell.
+#     """
+#     adata = adata.tables["table"] if isinstance(adata, SpatialData) else adata
+#     sq.gr.spatial_neighbors(adata, coord_type="generic", n_neighs=k)
+#     distances = adata.obsp["spatial_distances"].data
+#     if log and transform == "log":
+#         distances = np.log(distances)
+#     elif log and transform == "log1p":
+#         distances = np.log(1 + distances)
+    
+#     adata.obs[f"{k}_nn_distance"] = distances
+
+def get_distances(adata: AnnData | SpatialData, k=1, log=True, transform="log"):
+    """
+    For each cell get the distance to its k-th nearest neighbor.
+
+    Parameters
+    ----------
+    adata
+        AnnData or SpatialData object
+    k
+        Number of neighbors
+    log
+        Whether to log transform
+    transform
+        'log' or 'log1p'
+
     Returns
     -------
-    distances : array-like
-        Array of distances to k-th nearest neighbor for each cell.
+    Stores result in adata.obs[f"{k}_nn_distance"]
     """
-    adata = adata.tables["table"] if isinstance(adata, SpatialData) else adata
-    sq.gr.spatial_neighbors(adata, coord_type="generic", n_neighs=k)
-    distances = adata.obsp["spatial_distances"].data
-    if log and transform == "log":
-        distances = np.log(distances)
-    elif log and transform == "log1p":
-        distances = np.log(1 + distances)
-    
-    adata.obs[f"{k}_nn_distance"] = distances
 
+    adata = adata.tables["table"] if isinstance(adata, SpatialData) else adata
+
+    sq.gr.spatial_neighbors(
+        adata,
+        coord_type="generic",
+        n_neighs=k
+    )
+
+    dist_matrix = adata.obsp["spatial_distances"].tocsr()
+
+    n_cells = dist_matrix.shape[0]
+    kth_distances = np.zeros(n_cells)
+
+    for i in range(n_cells):
+        start, end = dist_matrix.indptr[i], dist_matrix.indptr[i + 1]
+        dists = dist_matrix.data[start:end]
+
+        if len(dists) > 0:
+            kth_distances[i] = np.max(dists)   # distance to k-th nearest neighbor
+        else:
+            kth_distances[i] = np.nan
+
+    if log:
+        if transform == "log":
+            kth_distances = np.log(kth_distances)
+        elif transform == "log1p":
+            kth_distances = np.log1p(kth_distances)
+
+    adata.obs[f"{k}_nn_distance"] = kth_distances
 # DEPRECATED
 # def get_neighbors(adata, type, n=40):
 #     if type == "delaunay":
@@ -30,82 +79,81 @@ def get_distances(adata: AnnData | SpatialData, k=1, log=True, transform="log"):
 #     elif type =="knn":
 #         sq.gr.spatial_neighbors(adata, coord_type="generic", n_neighs=n)
 
-def prune_graph(adata, gmm_key, prune_by="label", distance_key=None, n_std=2.0):
-    """
-    Prunes the spatial graph.
+# DEPRECATED
+# def prune_graph(adata, gmm_key, prune_by="label", distance_key=None, n_std=2.0):
+#     """
+#     Prunes the spatial graph.
     
-    If prune_by="distance":
-    1. Calculates thresholds using GMM stats (assumed to be from log-data).
-    2. Takes the LOG of the graph's spatial_distances.
-    3. Compares: log(graph_distance) > (Mean + n*Std).
-    """
+#     If prune_by="distance":
+#     1. Calculates thresholds using GMM stats (assumed to be from log-data).
+#     2. Takes the LOG of the graph's spatial_distances.
+#     3. Compares: log(graph_distance) > (Mean + n*Std).
+#     """
 
-    # CRITICAL: Use .copy() to avoid destroying the original spatial_connectivities in-place
-    A = adata.obsp["spatial_connectivities"].copy()
-    D = adata.obsp["spatial_distances"].copy()
+#     # CRITICAL: Use .copy() to avoid destroying the original spatial_connectivities in-place
+#     A = adata.obsp["spatial_connectivities"].copy()
+#     D = adata.obsp["spatial_distances"].copy()
     
-    indptr = A.indptr
-    indices = A.indices
+#     indptr = A.indptr
+#     indices = A.indices
 
-    if prune_by == "distance":
-        if distance_key is None:
-            raise ValueError("You must provide `distance_key` when using `prune_by='distance'`.")
+#     if prune_by == "distance":
+#         if distance_key is None:
+#             raise ValueError("You must provide `distance_key` when using `prune_by='distance'`.")
         
-        # 1. Group by GMM component and calculate stats (on already logged data)
-        stats = adata.obs.groupby(gmm_key, observed=False)[distance_key].agg(['mean', 'std'])
-        stats['std'] = stats['std'].fillna(0)
+#         # 1. Group by GMM component and calculate stats (on already logged data)
+#         stats = adata.obs.groupby(gmm_key, observed=False)[distance_key].agg(['mean', 'std'])
+#         stats['std'] = stats['std'].fillna(0)
         
-        # 2. Define threshold in LOG space
-        stats['log_threshold'] = stats['mean'] + (n_std * stats['std'])
+#         # 2. Define threshold in LOG space
+#         stats['log_threshold'] = stats['mean'] + (n_std * stats['std'])
         
-        # 3. Map thresholds to cells (no exp conversion needed here)
-        mapping_dict = stats['log_threshold'].to_dict()
-        cell_thresholds = adata.obs[gmm_key].map(mapping_dict).astype(float).values
+#         # 3. Map thresholds to cells (no exp conversion needed here)
+#         mapping_dict = stats['log_threshold'].to_dict()
+#         cell_thresholds = adata.obs[gmm_key].map(mapping_dict).astype(float).values
 
-    for i in range(A.shape[0]):
-        start, end = indptr[i], indptr[i + 1]
+#     for i in range(A.shape[0]):
+#         start, end = indptr[i], indptr[i + 1]
 
-        if start == end:
-            continue
+#         if start == end:
+#             continue
 
-        neigh_indices = indices[start:end]
+#         neigh_indices = indices[start:end]
 
-        if prune_by == "label":
-            row_label = adata.obs[gmm_key][i]
-            neigh_labels = adata.obs[gmm_key][neigh_indices]
-            keep = neigh_labels == row_label
-            drop = ~keep
+#         if prune_by == "label":
+#             row_label = adata.obs[gmm_key][i]
+#             neigh_labels = adata.obs[gmm_key][neigh_indices]
+#             keep = neigh_labels == row_label
+#             drop = ~keep
 
-        elif prune_by == "distance":
-            # Get physical edge lengths
-            raw_edge_lengths = D.data[start:end]
+#         elif prune_by == "distance":
+#             # Get physical edge lengths
+#             raw_edge_lengths = D.data[start:end]
             
-            # Log-transform the graph edges to match the domain of the GMM stats
-            # Adding a tiny epsilon to avoid log(0) if duplicate cells exist
-            log_edge_lengths = np.log(raw_edge_lengths + 1e-12)
+#             # Log-transform the graph edges to match the domain of the GMM stats
+#             # Adding a tiny epsilon to avoid log(0) if duplicate cells exist
+#             log_edge_lengths = np.log(raw_edge_lengths + 1e-12)
             
-            # Get the max log-threshold for this cell
-            max_log_allowed = cell_thresholds[i]
+#             # Get the max log-threshold for this cell
+#             max_log_allowed = cell_thresholds[i]
             
-            # Prune if log(dist) > log(threshold)
-            drop = log_edge_lengths > max_log_allowed
+#             # Prune if log(dist) > log(threshold)
+#             drop = log_edge_lengths > max_log_allowed
 
-        # Apply pruning
-        if np.any(drop):
-            A.data[start:end][drop] = 0.0
-            D.data[start:end][drop] = 0.0
+#         # Apply pruning
+#         if np.any(drop):
+#             A.data[start:end][drop] = 0.0
+#             D.data[start:end][drop] = 0.0
 
-    # Cleanup
-    A.eliminate_zeros()
-    D.eliminate_zeros()
+#     # Cleanup
+#     A.eliminate_zeros()
+#     D.eliminate_zeros()
     
-    adata.obsp["pruned_spatial_connectivities"] = A
-    adata.obsp["pruned_spatial_distances"] = D
+#     adata.obsp["pruned_spatial_connectivities"] = A
+#     adata.obsp["pruned_spatial_distances"] = D
     
-    print(f"Graph pruned by '{prune_by}'. stored in 'pruned_spatial_connectivities'.")
+#     print(f"Graph pruned by '{prune_by}'. stored in 'pruned_spatial_connectivities'.")
     
-import numpy as np
-import scipy.sparse as sp
 
 def prune_graph_new(adata, gmm_key, prune_by="label", distance_key=None, n_std=2.0):
 
